@@ -166,7 +166,10 @@ function startGame(room) {
     p.inVent = null;
     p.emergencyUsed = false;
     p.killReadyAt = now + 10000;
-    p.tasks = shuffle(MAP.TASKS)
+    // al menos una tarea-juego (Pong, Tetris, Breakout o nave) por jugador
+    const games = shuffle(MAP.TASKS.filter((t) => MAP.GAME_TASK_TYPES.includes(t.type)));
+    const rest = shuffle(MAP.TASKS.filter((t) => t !== games[0]));
+    p.tasks = [games[0], ...rest]
       .slice(0, s.tasksPerPlayer)
       .map((t) => ({ id: t.id, done: false }));
     const sp = MAP.spawnPoint(i, players.length);

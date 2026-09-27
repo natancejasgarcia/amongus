@@ -58,7 +58,13 @@
     { id: 'reactor_num', room: 'reactor', name: 'Arrancar reactor', type: 'numbers', x: 80, y: 870 },
     { id: 'upper_cal', room: 'upperEngine', name: 'Alinear motor', type: 'calibrate', x: 170, y: 160 },
     { id: 'medbay_scan', room: 'medbay', name: 'Escaneo médico', type: 'download', x: 790, y: 630 },
+    // tareas-juego (rápidas)
+    { id: 'comms_pong', room: 'comms', name: 'Sincronizar señal', type: 'pong', x: 1400, y: 1230 },
+    { id: 'storage_tetris', room: 'storage', name: 'Ordenar la carga', type: 'tetris', x: 1250, y: 900 },
+    { id: 'weap_breakout', room: 'weapons', name: 'Destruir asteroides', type: 'breakout', x: 1950, y: 170 },
+    { id: 'nav_flappy', room: 'navigation', name: 'Pilotar la nave', type: 'flappy', x: 2450, y: 645 },
   ];
+  const GAME_TASK_TYPES = ['pong', 'tetris', 'breakout', 'flappy'];
 
   const EMERGENCY = { x: 1250, y: 290 };
   const LIGHTS_PANEL = { x: 600, y: 1160 };
@@ -114,7 +120,7 @@
   }
 
   return {
-    WORLD, SPEED, BOX, ROOMS, HALLS, WALKABLE, TASKS, EMERGENCY, LIGHTS_PANEL,
+    WORLD, SPEED, BOX, ROOMS, HALLS, WALKABLE, TASKS, GAME_TASK_TYPES, EMERGENCY, LIGHTS_PANEL,
     REACTOR_PANELS, VENTS, canStand, moveWithCollision, clampWorld, spawnPoint, roomAt,
   };
 });

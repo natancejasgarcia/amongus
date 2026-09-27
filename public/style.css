@@ -288,4 +288,7 @@ input:focus { border-color: var(--accent); }
 .end-players div { display: flex; flex-direction: column; align-items: center; font-weight: 700; }
 .end-players .imp { color: var(--red); }
 
-.arcade-link { display: block; width: 100%; text-align: center; text-decoration: none; background: transparent; }
+.mg-canvas { display: block; width: 100%; height: auto; background: #000; border: 3px solid #111; border-radius: 8px; touch-action: none; cursor: pointer; }
+.mg-pad { display: flex; gap: 8px; margin-top: 10px; }
+.mg-pad button { flex: 1; height: 50px; font-size: 22px; font-weight: 800; border-radius: 10px; border: 3px solid #111; background: #5e6a8c; color: #fff; cursor: pointer; touch-action: none; }
+.mg-pad button:active { background: #2a4e8a; }
