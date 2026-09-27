@@ -218,11 +218,14 @@ input:focus { border-color: var(--accent); }
 .mg-progress { height: 30px; background: #111; border: 3px solid #fff; border-radius: 8px; overflow: hidden; margin: 16px 0; }
 .mg-progress div { height: 100%; width: 0; background: #43d146; }
 .mg-center { text-align: center; }
-.mg-slider { margin: 18px 0; }
-.mg-slider .track { position: relative; height: 24px; }
-.mg-slider .target { position: absolute; top: -6px; width: 10%; height: 36px; background: rgba(80, 239, 57, 0.35); border: 2px solid var(--good); border-radius: 6px; }
-.mg-slider input[type=range] { position: relative; width: 100%; padding: 0; border: none; background: transparent; accent-color: var(--yellow); }
-.mg-slider.ok .target { background: var(--good); }
+.mg-slider { margin: 22px 8px; }
+.mg-slider .track { position: relative; height: 44px; background: #15182a; border: 3px solid #111; border-radius: 8px; cursor: pointer; touch-action: none; }
+.mg-slider .track::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 4px; margin-top: -2px; background: #3a3f55; }
+.mg-slider .target { position: absolute; top: 0; bottom: 0; background: rgba(80, 239, 57, 0.3); border-left: 3px solid var(--good); border-right: 3px solid var(--good); box-sizing: border-box; }
+.mg-slider .handle { position: absolute; top: -8px; bottom: -8px; width: 14px; margin-left: -7px; background: var(--yellow); border: 3px solid #111; border-radius: 6px; pointer-events: none; }
+.mg-slider.drag .handle { box-shadow: 0 0 12px var(--yellow); }
+.mg-slider.ok .target { background: rgba(80, 239, 57, 0.75); }
+.mg-slider.ok .handle { background: var(--good); }
 .mg-switches { display: flex; justify-content: center; gap: 14px; margin: 16px 0; }
 .mg-switches button { width: 56px; height: 110px; border-radius: 10px; border: 3px solid #111; background: #333; cursor: pointer; position: relative; }
 .mg-switches button::after { content: ''; position: absolute; left: 6px; right: 6px; height: 44px; border-radius: 6px; background: #888; top: 54px; transition: top 0.15s; }

@@ -106,29 +106,56 @@
     },
 
     calibrate(hooks) {
+      // Deslizador propio: la posición dibujada y el valor comprobado salen del mismo número
+      const TOL = 6; // mitad del ancho de la zona verde, en %
       const rows = [0, 1].map(() => {
-        const target = 10 + Math.random() * 80;
-        let start;
-        do start = Math.random() * 100; while (Math.abs(start - target) < 20);
-        return { target, start };
+        const target = 12 + Math.random() * 76;
+        let value;
+        do value = 4 + Math.random() * 92; while (Math.abs(value - target) < 25);
+        return { target, value };
       });
-      bodyEl.innerHTML = `<p class="mg-center">Alinea los deslizadores con las zonas verdes</p>` +
+      bodyEl.innerHTML = `<p class="mg-center">Arrastra cada barra amarilla dentro de su zona verde</p>` +
         rows.map((r, i) => `<div class="mg-slider" data-i="${i}"><div class="track">
-          <div class="target" style="left:${r.target - 5}%"></div>
-          <input type="range" min="0" max="100" step="0.5" value="${r.start}" /></div></div>`).join('');
+          <div class="target" style="left:${r.target - TOL}%;width:${TOL * 2}%"></div>
+          <div class="handle" style="left:${r.value}%"></div></div></div>`).join('');
       const sliders = [...bodyEl.querySelectorAll('.mg-slider')];
+
       const check = () => {
         let all = true;
         sliders.forEach((s, i) => {
-          const v = Number(s.querySelector('input').value);
-          const good = Math.abs(v - rows[i].target) <= 5;
+          const good = Math.abs(rows[i].value - rows[i].target) <= TOL;
           s.classList.toggle('ok', good);
           if (!good) all = false;
         });
         return all;
       };
-      bodyEl.addEventListener('input', check);
-      bodyEl.addEventListener('change', () => { if (check() && !current.finished) finish(hooks); });
+
+      sliders.forEach((s, i) => {
+        const track = s.querySelector('.track');
+        const handle = s.querySelector('.handle');
+        const setFrom = (e) => {
+          const rect = track.getBoundingClientRect();
+          rows[i].value = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+          handle.style.left = rows[i].value + '%';
+          check();
+        };
+        track.addEventListener('pointerdown', (e) => {
+          if (current.finished) return;
+          track.setPointerCapture(e.pointerId);
+          s.classList.add('drag');
+          setFrom(e);
+        });
+        track.addEventListener('pointermove', (e) => {
+          if (track.hasPointerCapture(e.pointerId)) setFrom(e);
+        });
+        const release = () => {
+          s.classList.remove('drag');
+          if (check() && !current.finished) finish(hooks);
+        };
+        track.addEventListener('pointerup', release);
+        track.addEventListener('pointercancel', release);
+      });
+      check();
     },
 
     lights(hooks) {
