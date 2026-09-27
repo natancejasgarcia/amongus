@@ -120,7 +120,7 @@ function findPlayer(room, text) {
 function systemPrompt(room, bot) {
   const others = [...room.players.values()].filter((p) => p !== bot);
   const base = `Eres ${label(bot)}, jugando a Among Us. Estás en una reunión escribiendo en el chat del juego.
-Escribe como un jugador real en un chat de videojuego: español de España informal, frases muy cortas (máximo 15 palabras), a veces sin tildes ni mayúsculas. Nada de emojis salvo alguno suelto. Nunca digas que eres una IA ni un bot. No repitas lo que ya dijiste.`;
+Escribe como un jugador real en un chat de videojuego: español de España informal, UNA sola frase corta por mensaje (máximo 18 palabras, como alguien que teclea rápido), a veces sin tildes ni mayúsculas. Nada de emojis salvo alguno suelto. Nunca digas que eres una IA ni un bot. No repitas lo que ya dijiste.`;
   if (bot.role === 'impostor') {
     const mates = others.filter((p) => p.role === 'impostor').map(label);
     return `${base}
@@ -186,7 +186,13 @@ function warnOnce(err) {
   return null;
 }
 
-const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+// Recorta mensajes largos por el último espacio para no cortar palabras
+const clean = (s) => {
+  const t = String(s || '').replace(/\s+/g, ' ').trim();
+  if (t.length <= 150) return t;
+  const cut = t.slice(0, 150);
+  return cut.slice(0, cut.lastIndexOf(' ')).replace(/[,.;:]$/, '') + '...';
+};
 
 // ---------- frases sin IA ----------
 function fallback(room, bot) {
