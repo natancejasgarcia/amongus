@@ -1,9 +1,13 @@
+// Carga ANTHROPIC_API_KEY desde .env en local (en Railway se pone en Variables)
+try { process.loadEnvFile(); } catch (_) {}
+
 const express = require('express');
 const http = require('http');
 const path = require('path');
 const os = require('os');
 const { Server } = require('socket.io');
 const MAP = require('./shared/map');
+const BotChat = require('./botchat');
 
 const PORT = process.env.PORT || 3000;
 const MIN_PLAYERS = Number(process.env.MIN_PLAYERS || 3);
@@ -37,6 +41,8 @@ const COLORS = [
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
+const colorName = (id) => (COLORS.find((c) => c.id === id) || {}).name || id;
+BotChat.init({ io, colorName });
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/shared', express.static(path.join(__dirname, 'shared')));
@@ -120,11 +126,14 @@ function newPlayer(socket, name, room) {
 
 function newBot(room) {
   const n = [...room.players.values()].filter((p) => p.isBot).length + 1;
-  const bot = newPlayer({ id: `bot_${room.code}_${Date.now()}_${n}` }, `Bot ${n}`, room);
+  const used = new Set([...room.players.values()].map((p) => p.name));
+  const name = shuffle(BOT_NAMES).find((x) => !used.has(x)) || `Bot ${n}`;
+  const bot = newPlayer({ id: `bot_${room.code}_${Date.now()}_${n}` }, name, room);
   bot.isBot = true;
   bot.ai = newAi();
   return bot;
 }
+const BOT_NAMES = ['Lucía', 'Pablo', 'Marta', 'Hugo', 'Sara', 'Leo', 'Nora', 'Iván', 'Carla', 'Diego', 'Alba', 'Mario'];
 const newAi = () => ({ goal: null, path: [], workUntil: 0, stuckFor: 0, voteAt: 0 });
 const humans = (room) => [...room.players.values()].filter((p) => !p.isBot);
 
@@ -237,11 +246,14 @@ function checkWin(room) {
   return false;
 }
 
+let meetingCounter = 0;
 function startMeeting(room, caller, body) {
   const now = Date.now();
   room.phase = 'meeting';
   room.sabotage = null;
+  if (body) body.roomName = (MAP.roomAt(body.x, body.y) || { name: 'un pasillo' }).name;
   room.meeting = {
+    id: ++meetingCounter,
     type: body ? 'report' : 'emergency',
     callerId: caller.id,
     reportedColor: body ? body.color : null,
@@ -255,8 +267,9 @@ function startMeeting(room, caller, body) {
     p.inVent = null;
     const sp = MAP.spawnPoint(i, players.length);
     forcePos(p, sp.x, sp.y);
-    if (p.isBot) p.ai = newAi();
+    if (p.isBot) p.ai = { ...newAi(), memory: p.ai.memory }; // conserva lo que vio
   });
+  BotChat.onMeetingStart(room, caller, body);
   io.to(room.code).emit('meetingCalled', {
     type: room.meeting.type,
     callerName: caller.name,
@@ -326,6 +339,7 @@ function resumePlaying(room) {
 
 function killPlayer(room, killer, victim) {
   const now = Date.now();
+  if (killer.isBot) BotChat.rememberKill(killer, victim);
   victim.alive = false;
   room.bodies.push({ id: room.nextBodyId++, color: victim.color, x: Math.round(victim.x), y: Math.round(victim.y) });
   forcePos(killer, victim.x, victim.y);
@@ -455,6 +469,7 @@ function botThink(room, b, dt, now) {
     if (g && g.kind === 'task') {
       const t = b.tasks.find((t) => t.id === g.id);
       if (t) t.done = true;
+      BotChat.rememberTask(b, g.at.name);
       checkWin(room);
     } else if (g && g.kind === 'lights' && room.sabotage && room.sabotage.type === 'lights') {
       sabotageFixed(room);
@@ -504,7 +519,9 @@ function botVotes(room, now) {
     if (!b.ai.voteAt) b.ai.voteAt = now + 2000 + Math.random() * Math.min(15000, room.settings.votingTime * 500);
     if (now < b.ai.voteAt) continue;
     const candidates = alive.filter((p) => p !== b && !(b.role === 'impostor' && p.role === 'impostor'));
-    m.votes[b.id] = Math.random() < 0.5 || !candidates.length ? 'skip' : candidates[Math.floor(Math.random() * candidates.length)].id;
+    const suspect = candidates.find((p) => p.id === b.ai.suspect);
+    if (suspect && Math.random() < 0.85) m.votes[b.id] = suspect.id; // vota a quien acusó en el chat
+    else m.votes[b.id] = Math.random() < 0.6 || !candidates.length ? 'skip' : candidates[Math.floor(Math.random() * candidates.length)].id;
   }
 }
 
@@ -513,7 +530,10 @@ function tickRoom(room) {
 
   if (room.phase === 'playing') {
     for (const p of room.players.values()) {
-      if (p.isBot && room.phase === 'playing') botThink(room, p, TICK_MS / 1000, now);
+      if (p.isBot && room.phase === 'playing') {
+        botThink(room, p, TICK_MS / 1000, now);
+        BotChat.observe(room, p, now);
+      }
     }
   }
   if (room.phase === 'meeting') botVotes(room, now);
@@ -860,6 +880,7 @@ io.on('connection', (socket) => {
       for (const o of room.players.values()) if (!o.alive) io.to(o.id).emit('chat', payload);
     } else {
       io.to(room.code).emit('chat', payload);
+      if (room.phase === 'meeting') BotChat.onHumanChat(room, p, msg);
     }
   });
 
@@ -894,5 +915,8 @@ server.listen(PORT, '0.0.0.0', () => {
       if (i.family === 'IPv4' && !i.internal) console.log(`  En tu red local:        http://${i.address}:${PORT}`);
     }
   }
-  console.log(`  Jugadores mínimos: ${MIN_PLAYERS} (cámbialo con MIN_PLAYERS=2)\n`);
+  console.log(`  Jugadores mínimos: ${MIN_PLAYERS} (cámbialo con MIN_PLAYERS=2)`);
+  console.log(BotChat.enabled()
+    ? `  Chat de bots: IA activada (${BotChat.MODEL})\n`
+    : '  Chat de bots: frases predefinidas (pon ANTHROPIC_API_KEY en .env para usar IA)\n');
 });
