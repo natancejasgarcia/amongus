@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Tetris</title>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Space+Grotesk:wght@400;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="shared.css" />
+</head>
+<body>
+  <div class="page">
+    <div class="topbar">
+      <a href="index.html">← Arcade</a>
+      <h1>TETRIS</h1>
+      <span class="best" id="best"></span>
+    </div>
+    <div class="stage">
+      <canvas class="game" id="c"></canvas>
+      <div class="overlay" id="menu">
+        <h2>TETRIS</h2>
+        <div class="row">
+          <button class="btn" data-mode="marathon">Maratón</button>
+          <button class="btn ghost" data-mode="sprint">Sprint 40 líneas</button>
+        </div>
+        <p class="keys"><kbd>←</kbd><kbd>→</kbd> mover · <kbd>↓</kbd> bajar · <kbd>ESPACIO</kbd> caída · <kbd>↑</kbd>/<kbd>X</kbd> girar · <kbd>Z</kbd> girar al revés · <kbd>C</kbd> reservar · <kbd>P</kbd> pausa</p>
+      </div>
+      <div class="overlay hidden" id="over">
+        <h2 id="overTitle">FIN</h2>
+        <p id="overSub"></p>
+        <div class="row">
+          <button class="btn" id="again">Otra vez</button>
+          <button class="btn ghost" id="toMenu">Menú</button>
+        </div>
+      </div>
+      <div class="overlay hidden" id="pause"><h2>PAUSA</h2><p>Pulsa P o toca para seguir</p></div>
+    </div>
+    <div class="touch">
+      <button id="tHold">⇄</button>
+      <button id="tLeft">◀</button>
+      <button id="tRot">⟳</button>
+      <button id="tRight">▶</button>
+      <button id="tSoft">▼</button>
+      <button id="tDrop">⤓</button>
+    </div>
+  </div>
+
+  <script src="shared.js"></script>
+  <script>
+    const COLS = 10, ROWS = 20, HIDDEN = 2, CELL = 30;
+    const BX = 150, BY = 12; // posición del tablero
+    const W = BX * 2 + COLS * CELL, H = ROWS * CELL + BY * 2;
+    const canvas = document.getElementById('c');
+    const ctx = Arcade.setupCanvas(canvas, W, H);
+    const fx = Arcade.particles();
+    const $ = (id) => document.getElementById(id);
+
+    const SHAPES = {
+      I: [[0, 0, 0, 0], [1, 1, 1, 1], [0, 0, 0, 0], [0, 0, 0, 0]],
+      O: [[1, 1], [1, 1]],
+      T: [[0, 1, 0], [1, 1, 1], [0, 0, 0]],
+      S: [[0, 1, 1], [1, 1, 0], [0, 0, 0]],
+      Z: [[1, 1, 0], [0, 1, 1], [0, 0, 0]],
+      J: [[1, 0, 0], [1, 1, 1], [0, 0, 0]],
+      L: [[0, 0, 1], [1, 1, 1], [0, 0, 0]],
+    };
+    const COLORS = { I: '#3ee6ff', O: '#ffd23f', T: '#b44dff', S: '#5dff8a', Z: '#ff4d4d', J: '#4d7cff', L: '#ff9f3f' };
+    const KICKS = [[0, 0], [-1, 0], [1, 0], [0, -1], [-2, 0], [2, 0], [-1, -1], [1, -1]];
+
+    let board, bag, queue, piece, hold, canHold, score, lines, level, mode, state, startTime, endTime;
+    let dropTimer, lockTimer, lockMoves, clearFlash;
+    const DAS = 130, ARR = 28, SOFT = 25, LOCK = 480;
+
+    // ---- piezas ----
+    function refillBag() {
+      const b = Object.keys(SHAPES);
+      for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; }
+      bag.push(...b);
+    }
+    function nextType() {
+      if (bag.length < 7) refillBag();
+      queue.push(bag.shift());
+      return queue.shift();
+    }
+    function spawn(type) {
+      const m = SHAPES[type].map((r) => r.slice());
+      piece = { type, m, x: Math.floor((COLS - m.length) / 2), y: type === 'I' ? 0 : 1 };
+      lockTimer = 0; lockMoves = 0; dropTimer = 0;
+      if (collides(piece.m, piece.x, piece.y)) gameOver(false);
+    }
+    function collides(m, x, y) {
+      for (let r = 0; r < m.length; r++)
+        for (let c = 0; c < m.length; c++) {
+          if (!m[r][c]) continue;
+          const bx = x + c, by = y + r;
+          if (bx < 0 || bx >= COLS || by >= ROWS + HIDDEN) return true;
+          if (by >= 0 && board[by][bx]) return true;
+        }
+      return false;
+    }
+    function rotate(m, dir) {
+      const n = m.length;
+      const out = Array.from({ length: n }, () => Array(n).fill(0));
+      for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
+        if (dir > 0) out[c][n - 1 - r] = m[r][c];
+        else out[n - 1 - c][r] = m[r][c];
+      }
+      return out;
+    }
+    const grounded = () => collides(piece.m, piece.x, piece.y + 1);
+    function resetLockIfGrounded() {
+      if (grounded() && lockMoves < 15) { lockTimer = 0; lockMoves++; }
+    }
+
+    // ---- acciones ----
+    function move(dx) {
+      if (!collides(piece.m, piece.x + dx, piece.y)) { piece.x += dx; resetLockIfGrounded(); Arcade.beep(900, 0.015, 'square', 0.02); return true; }
+      return false;
+    }
+    function turn(dir) {
+      if (piece.type === 'O') return;
+      const m = rotate(piece.m, dir);
+      for (const [kx, ky] of KICKS) {
+        if (!collides(m, piece.x + kx, piece.y + ky)) {
+          piece.m = m; piece.x += kx; piece.y += ky;
+          resetLockIfGrounded();
+          Arcade.beep(700, 0.03, 'triangle', 0.04);
+          return;
+        }
+      }
+    }
+    function softDrop() {
+      if (!collides(piece.m, piece.x, piece.y + 1)) { piece.y++; score += 1; dropTimer = 0; return true; }
+      return false;
+    }
+    function hardDrop() {
+      let n = 0;
+      while (!collides(piece.m, piece.x, piece.y + 1)) { piece.y++; n++; }
+      score += n * 2;
+      // estela de la caída
+      for (let r = 0; r < piece.m.length; r++) for (let c = 0; c < piece.m.length; c++)
+        if (piece.m[r][c]) fx.burst(BX + (piece.x + c + 0.5) * CELL, BY + (piece.y + r - HIDDEN + 1) * CELL, COLORS[piece.type], 3, 120, 0.3);
+      lock();
+    }
+    function doHold() {
+      if (!canHold) return;
+      const t = piece.type;
+      if (hold) spawn(hold); else spawn(nextType());
+      hold = t;
+      canHold = false;
+      Arcade.beep(500, 0.04, 'triangle', 0.04);
+    }
+
+    function lock() {
+      for (let r = 0; r < piece.m.length; r++) for (let c = 0; c < piece.m.length; c++)
+        if (piece.m[r][c]) {
+          const y = piece.y + r;
+          if (y < HIDDEN) return gameOver(false); // bloqueada por encima del tablero visible
+          board[y][piece.x + c] = piece.type;
+        }
+      const full = [];
+      for (let y = 0; y < ROWS + HIDDEN; y++) if (board[y].every(Boolean)) full.push(y);
+      if (full.length) {
+        for (const y of full) {
+          for (let x = 0; x < COLS; x++) fx.burst(BX + (x + 0.5) * CELL, BY + (y - HIDDEN + 0.5) * CELL, COLORS[board[y][x]], 4, 260, 0.5);
+          board.splice(y, 1);
+          board.unshift(Array(COLS).fill(null));
+        }
+        lines += full.length;
+        score += [0, 100, 300, 500, 800][full.length] * level;
+        level = 1 + Math.floor(lines / 10);
+        clearFlash = { rows: full, t: 0.18, n: full.length };
+        const notes = [0, [660], [660, 880], [660, 880, 990], [523, 659, 784, 1047]][full.length];
+        notes.forEach((f, i) => setTimeout(() => Arcade.beep(f, 0.09, 'square', 0.05), i * 60));
+        if (mode === 'sprint' && lines >= 40) return gameOver(true);
+      } else {
+        Arcade.beep(160, 0.05, 'triangle', 0.05);
+      }
+      canHold = true;
+      spawn(nextType());
+    }
+
+    function gravityMs() {
+      return Math.max(30, 700 * Math.pow(0.8, level - 1));
+    }
+
+    // ---- entrada con DAS/ARR ----
+    const held = { left: false, right: false, down: false };
+    let dasDir = 0, dasTimer = 0, arrTimer = 0, softTimer = 0;
+    function press(dir) {
+      if (state !== 'play') return;
+      held[dir] = true;
+      if (dir === 'left' || dir === 'right') {
+        dasDir = dir === 'left' ? -1 : 1;
+        dasTimer = 0; arrTimer = 0;
+        move(dasDir);
+      } else if (dir === 'down') { softTimer = 0; softDrop(); }
+    }
+    function release(dir) {
+      held[dir] = false;
+      if ((dir === 'left' && dasDir === -1) || (dir === 'right' && dasDir === 1))
+        dasDir = held.left ? -1 : held.right ? 1 : 0;
+    }
+
+    const KEYMAP = { arrowleft: 'left', a: 'left', arrowright: 'right', d: 'right', arrowdown: 'down', s: 'down' };
+    addEventListener('keydown', (e) => {
+      const k = e.key.toLowerCase();
+      if (['arrowleft', 'arrowright', 'arrowdown', 'arrowup', ' '].includes(k)) e.preventDefault();
+      if (k === 'p' || k === 'escape') return togglePause();
+      if (state !== 'play' || e.repeat) return;
+      if (KEYMAP[k]) press(KEYMAP[k]);
+      else if (k === 'arrowup' || k === 'x' || k === 'w') turn(1);
+      else if (k === 'z' || k === 'control') turn(-1);
+      else if (k === ' ') hardDrop();
+      else if (k === 'c' || k === 'shift') doHold();
+    });
+    addEventListener('keyup', (e) => { const k = KEYMAP[e.key.toLowerCase()]; if (k) release(k); });
+    addEventListener('blur', () => { held.left = held.right = held.down = false; dasDir = 0; if (state === 'play') togglePause(); });
+
+    Arcade.holdButton($('tLeft'), () => press('left'), () => release('left'));
+    Arcade.holdButton($('tRight'), () => press('right'), () => release('right'));
+    Arcade.holdButton($('tSoft'), () => press('down'), () => release('down'));
+    Arcade.holdButton($('tRot'), () => state === 'play' && turn(1));
+    Arcade.holdButton($('tDrop'), () => state === 'play' && hardDrop());
+    Arcade.holdButton($('tHold'), () => state === 'play' && doHold());
+    // Tocar el tablero también gira
+    canvas.addEventListener('pointerdown', () => { if (state === 'play') turn(1); });
+
+    function togglePause() {
+      if (state === 'play') { state = 'pause'; pausedAt = performance.now(); }
+      else if (state === 'pause') { state = 'play'; startTime += performance.now() - pausedAt; }
+      $('pause').classList.toggle('hidden', state !== 'pause');
+    }
+    let pausedAt = 0;
+    $('pause').addEventListener('click', togglePause);
+
+    // ---- partida ----
+    document.querySelectorAll('[data-mode]').forEach((b) => b.onclick = () => start(b.dataset.mode));
+    $('again').onclick = () => start(mode);
+    $('toMenu').onclick = () => { $('over').classList.add('hidden'); $('menu').classList.remove('hidden'); state = 'menu'; };
+    const bestKey = () => (mode === 'sprint' ? 'tetris_sprint' : 'tetris');
+    function showBest() {
+      const m = Arcade.getBest('tetris'), s = Arcade.getBest('tetris_sprint');
+      $('best').textContent = [m ? `RECORD ${m}` : '', s ? `SPRINT ${fmtTime(s)}` : ''].filter(Boolean).join(' · ');
+    }
+    const fmtTime = (ms) => `${Math.floor(ms / 60000)}:${String(Math.floor((ms / 1000) % 60)).padStart(2, '0')}.${String(Math.floor((ms % 1000) / 10)).padStart(2, '0')}`;
+    showBest();
+
+    function start(m) {
+      mode = m;
+      board = Array.from({ length: ROWS + HIDDEN }, () => Array(COLS).fill(null));
+      bag = []; queue = [];
+      refillBag();
+      for (let i = 0; i < 5; i++) queue.push(bag.shift());
+      hold = null; canHold = true;
+      score = 0; lines = 0; level = 1;
+      clearFlash = null;
+      fx.clear();
+      held.left = held.right = held.down = false; dasDir = 0;
+      state = 'play';
+      startTime = performance.now();
+      endTime = null;
+      $('menu').classList.add('hidden');
+      $('over').classList.add('hidden');
+      spawn(nextType());
+    }
+
+    function gameOver(won) {
+      state = 'over';
+      endTime = performance.now();
+      const time = endTime - startTime;
+      if (mode === 'sprint') {
+        $('overTitle').textContent = won ? '¡40 LINEAS!' : 'FIN';
+        const best = Arcade.getBest('tetris_sprint');
+        const record = won && (!best || time < best);
+        if (record) Arcade.setBest('tetris_sprint', Math.round(time));
+        $('overSub').textContent = won ? `Tiempo: ${fmtTime(time)}${record ? ' · ¡NUEVO RÉCORD!' : ''}` : `${lines}/40 líneas`;
+      } else {
+        $('overTitle').textContent = 'FIN';
+        const record = score > Arcade.getBest('tetris');
+        if (record) Arcade.setBest('tetris', score);
+        $('overSub').textContent = `Puntos: ${score} · Líneas: ${lines} · Nivel ${level}${record ? ' · ¡NUEVO RÉCORD!' : ''}`;
+      }
+      showBest();
+      Arcade.beep(won ? 523 : 220, 0.4, 'square', 0.05, won ? 1046 : 80);
+      $('over').classList.remove('hidden');
+    }
+
+    function update(dt) {
+      const ms = dt * 1000;
+      // movimiento lateral con autorepetición
+      if (dasDir) {
+        dasTimer += ms;
+        if (dasTimer >= DAS) {
+          arrTimer += ms;
+          while (arrTimer >= ARR) { arrTimer -= ARR; if (!move(dasDir)) break; }
+        }
+      }
+      if (held.down) {
+        softTimer += ms;
+        while (softTimer >= SOFT) { softTimer -= SOFT; softDrop(); }
+      }
+      if (state !== 'play') return;
+      // gravedad y bloqueo
+      if (grounded()) {
+        lockTimer += ms;
+        if (lockTimer >= LOCK) lock();
+      } else {
+        dropTimer += ms;
+        const g = gravityMs();
+        while (dropTimer >= g && !grounded()) { dropTimer -= g; piece.y++; }
+      }
+      if (clearFlash) { clearFlash.t -= dt; if (clearFlash.t <= 0) clearFlash = null; }
+    }
+
+    // ---- dibujo ----
+    function cell(x, y, color, size = CELL, alpha = 1) {
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = color;
+      ctx.fillRect(x + 1, y + 1, size - 2, size - 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.28)';
+      ctx.fillRect(x + 1, y + 1, size - 2, 4);
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.fillRect(x + 1, y + size - 5, size - 2, 4);
+      ctx.globalAlpha = 1;
+    }
+    function mini(type, cx, cy, size) {
+      const m = SHAPES[type];
+      let minR = 9, maxR = -1, minC = 9, maxC = -1;
+      m.forEach((row, r) => row.forEach((v, c) => { if (v) { minR = Math.min(minR, r); maxR = Math.max(maxR, r); minC = Math.min(minC, c); maxC = Math.max(maxC, c); } }));
+      const w = (maxC - minC + 1) * size, h = (maxR - minR + 1) * size;
+      m.forEach((row, r) => row.forEach((v, c) => {
+        if (v) cell(cx - w / 2 + (c - minC) * size, cy - h / 2 + (r - minR) * size, COLORS[type], size, canHold || cx > BX ? 1 : 0.35);
+      }));
+    }
+    function label(text, x, y) {
+      ctx.fillStyle = '#8b8f98';
+      ctx.font = '10px "Press Start 2P", monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(text, x, y);
+    }
+    function value(text, x, y) {
+      ctx.fillStyle = '#f4f4f0';
+      ctx.font = '14px "Press Start 2P", monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(text, x, y);
+    }
+
+    function draw() {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, W, H);
+      const bw = COLS * CELL, bh = ROWS * CELL;
+      ctx.fillStyle = '#0b0c0e';
+      ctx.fillRect(BX, BY, bw, bh);
+      ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+      ctx.lineWidth = 1;
+      for (let x = 1; x < COLS; x++) { ctx.beginPath(); ctx.moveTo(BX + x * CELL + 0.5, BY); ctx.lineTo(BX + x * CELL + 0.5, BY + bh); ctx.stroke(); }
+      for (let y = 1; y < ROWS; y++) { ctx.beginPath(); ctx.moveTo(BX, BY + y * CELL + 0.5); ctx.lineTo(BX + bw, BY + y * CELL + 0.5); ctx.stroke(); }
+      ctx.strokeStyle = '#34373e';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(BX - 1, BY - 1, bw + 2, bh + 2);
+
+      if (board) {
+        for (let y = HIDDEN; y < ROWS + HIDDEN; y++)
+          for (let x = 0; x < COLS; x++)
+            if (board[y][x]) cell(BX + x * CELL, BY + (y - HIDDEN) * CELL, COLORS[board[y][x]]);
+
+        if (piece && state !== 'over') {
+          // fantasma
+          let gy = piece.y;
+          while (!collides(piece.m, piece.x, gy + 1)) gy++;
+          for (let r = 0; r < piece.m.length; r++) for (let c = 0; c < piece.m.length; c++) {
+            if (!piece.m[r][c]) continue;
+            const px = BX + (piece.x + c) * CELL;
+            if (gy + r >= HIDDEN) {
+              ctx.strokeStyle = COLORS[piece.type];
+              ctx.globalAlpha = 0.5;
+              ctx.lineWidth = 2;
+              ctx.strokeRect(px + 2, BY + (gy + r - HIDDEN) * CELL + 2, CELL - 4, CELL - 4);
+              ctx.globalAlpha = 1;
+            }
+            if (piece.y + r >= HIDDEN) {
+              const lockFade = grounded() ? 1 - (lockTimer / LOCK) * 0.4 : 1;
+              cell(px, BY + (piece.y + r - HIDDEN) * CELL, COLORS[piece.type], CELL, lockFade);
+            }
+          }
+        }
+
+        if (clearFlash) {
+          ctx.fillStyle = `rgba(255,255,255,${clearFlash.t / 0.18 * 0.6})`;
+          for (const y of clearFlash.rows) ctx.fillRect(BX, BY + (y - HIDDEN) * CELL, bw, CELL);
+          if (clearFlash.n === 4) {
+            ctx.fillStyle = '#ffd23f';
+            ctx.font = '20px "Press Start 2P", monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('¡TETRIS!', BX + bw / 2, BY + bh / 2);
+          }
+        }
+
+        // panel izquierdo: reserva y estadísticas
+        const lx = BX / 2;
+        label('RESERVA', lx, 34);
+        if (hold) mini(hold, lx, 80, 22);
+        label(mode === 'sprint' ? 'LINEAS' : 'PUNTOS', lx, 170);
+        value(mode === 'sprint' ? `${lines}/40` : String(score), lx, 196);
+        label('TIEMPO', lx, 250);
+        const t = (endTime || (state === 'pause' ? pausedAt : performance.now())) - startTime;
+        value(fmtTime(t), lx, 276);
+        if (mode !== 'sprint') {
+          label('LINEAS', lx, 330); value(String(lines), lx, 356);
+          label('NIVEL', lx, 410); value(String(level), lx, 436);
+        }
+
+        // panel derecho: siguientes
+        const rx = BX + bw + BX / 2;
+        label('SIGUIENTE', rx, 34);
+        queue.slice(0, 4).forEach((q, i) => mini(q, rx, 80 + i * 78, i === 0 ? 24 : 18));
+      }
+      fx.draw(ctx);
+    }
+
+    let last = performance.now();
+    function loop(t) {
+      const dt = Math.min((t - last) / 1000, 0.05);
+      last = t;
+      if (state === 'play') update(dt);
+      fx.update(dt);
+      draw();
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
