@@ -120,7 +120,8 @@ function findPlayer(room, text) {
 function systemPrompt(room, bot) {
   const others = [...room.players.values()].filter((p) => p !== bot);
   const base = `Eres ${label(bot)}, jugando a Among Us. Estás en una reunión escribiendo en el chat del juego.
-Escribe como un jugador real en un chat de videojuego: español de España informal, UNA sola frase corta por mensaje (máximo 18 palabras, como alguien que teclea rápido), a veces sin tildes ni mayúsculas. Nada de emojis salvo alguno suelto. Nunca digas que eres una IA ni un bot. No repitas lo que ya dijiste.`;
+Escribe como un jugador real en un chat de videojuego: español de España informal, UNA sola frase corta por mensaje (máximo 18 palabras, como alguien que teclea rápido), a veces sin tildes ni mayúsculas. Nada de emojis salvo alguno suelto.
+Escribe directamente el mensaje que verían los demás, hablándoles a ellos: nunca narres ni describas lo que vas a decir. Tú eres ${bot.name}: habla de ti en primera persona y nunca te nombres. Nunca digas que eres una IA ni un bot. No repitas lo que ya dijiste.`;
   if (bot.role === 'impostor') {
     const mates = others.filter((p) => p.role === 'impostor').map(label);
     return `${base}
@@ -137,7 +138,7 @@ function userPrompt(room, bot) {
   const alive = all.filter((p) => p.alive).map(label).join(', ');
   const dead = all.filter((p) => !p.alive).map(label).join(', ') || 'nadie';
   const memory = (bot.ai.memory || []).join('\n') || '(no recuerdas nada destacable)';
-  const chat = m.chat.length ? m.chat.map((c) => `${c.name} (${c.color}): ${c.text}`).join('\n') : '(nadie ha escrito todavía)';
+  const chat = m.chat.length ? m.chat.map((c) => `${c.name === bot.name ? 'TÚ' : `${c.name} (${c.color})`}: ${c.text}`).join('\n') : '(nadie ha escrito todavía)';
   return `Qué ha pasado: ${m.context}
 Vivos: ${alive}
 Muertos: ${dead}
