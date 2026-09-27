@@ -72,8 +72,9 @@ function makeCode() {
 }
 
 function defaultSettings() {
-  return { impostors: 1, killCooldown: 25, discussionTime: 15, votingTime: 60, tasksPerPlayer: 5 };
+  return { impostors: 1, killCooldown: 25, discussionTime: 15, votingTime: 60, tasksPerPlayer: 5, hostRole: 'random' };
 }
+const HOST_ROLES = ['random', 'crew', 'impostor'];
 
 function createRoom() {
   const room = {
@@ -117,10 +118,15 @@ function newPlayer(socket, name, room) {
   };
 }
 
-function colorName(id) {
-  const c = COLORS.find((c) => c.id === id);
-  return c ? c.name : id;
+function newBot(room) {
+  const n = [...room.players.values()].filter((p) => p.isBot).length + 1;
+  const bot = newPlayer({ id: `bot_${room.code}_${Date.now()}_${n}` }, `Bot ${n}`, room);
+  bot.isBot = true;
+  bot.ai = newAi();
+  return bot;
 }
+const newAi = () => ({ goal: null, path: [], workUntil: 0, stuckFor: 0, voteAt: 0 });
+const humans = (room) => [...room.players.values()].filter((p) => !p.isBot);
 
 function forcePos(p, x, y) {
   p.x = x;
@@ -145,7 +151,13 @@ function startGame(room) {
   const players = [...room.players.values()];
   const s = room.settings;
   const impostorCount = Math.max(1, Math.min(s.impostors, Math.floor((players.length - 1) / 2)));
-  const impostorIds = new Set(shuffle(players).slice(0, impostorCount).map((p) => p.id));
+  // Modo admin: el anfitrión puede fijar su propio rol
+  const host = room.players.get(room.hostId);
+  let pool = shuffle(players);
+  const impostorIds = new Set();
+  if (host && s.hostRole === 'impostor') impostorIds.add(host.id);
+  if (host && s.hostRole !== 'random') pool = pool.filter((p) => p.id !== host.id);
+  for (const p of pool) if (impostorIds.size < impostorCount) impostorIds.add(p.id);
   const now = Date.now();
 
   players.forEach((p, i) => {
@@ -159,6 +171,7 @@ function startGame(room) {
       .map((t) => ({ id: t.id, done: false }));
     const sp = MAP.spawnPoint(i, players.length);
     forcePos(p, sp.x, sp.y);
+    if (p.isBot) p.ai = newAi();
   });
 
   room.phase = 'playing';
@@ -239,6 +252,7 @@ function startMeeting(room, caller, body) {
     p.inVent = null;
     const sp = MAP.spawnPoint(i, players.length);
     forcePos(p, sp.x, sp.y);
+    if (p.isBot) p.ai = newAi();
   });
   io.to(room.code).emit('meetingCalled', {
     type: room.meeting.type,
@@ -307,8 +321,199 @@ function resumePlaying(room) {
   for (const p of room.players.values()) p.killReadyAt = now + room.settings.killCooldown * 1000;
 }
 
+function killPlayer(room, killer, victim) {
+  const now = Date.now();
+  victim.alive = false;
+  room.bodies.push({ id: room.nextBodyId++, color: victim.color, x: Math.round(victim.x), y: Math.round(victim.y) });
+  forcePos(killer, victim.x, victim.y);
+  killer.killReadyAt = now + room.settings.killCooldown * 1000;
+  io.to(victim.id).emit('killed', { killerColor: killer.color });
+  io.to(killer.id).emit('didKill');
+  checkWin(room);
+}
+
+function sabotageFixed(room) {
+  room.sabotage = null;
+  room.sabotageReadyAt = Date.now() + SABOTAGE_COOLDOWN;
+  io.to(room.code).emit('sabotageFixed');
+}
+
+function checkReactor(room) {
+  const s = room.sabotage;
+  if (s && s.type === 'reactor' && s.holds.A && s.holds.B && s.holds.A !== s.holds.B) sabotageFixed(room);
+}
+
+// ---------- bots ----------
+// Grafo de navegación: cada rectángulo transitable es un nodo; dos nodos se
+// conectan si se solapan, pasando por el centro del solape.
+const NAV = (() => {
+  const R = MAP.WALKABLE;
+  const center = (r) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
+  const edges = R.map(() => []);
+  for (let i = 0; i < R.length; i++)
+    for (let j = i + 1; j < R.length; j++) {
+      const a = R[i], b = R[j];
+      const x1 = Math.max(a.x, b.x), x2 = Math.min(a.x + a.w, b.x + b.w);
+      const y1 = Math.max(a.y, b.y), y2 = Math.min(a.y + a.h, b.y + b.h);
+      if (x2 > x1 && y2 > y1) {
+        const via = { x: (x1 + x2) / 2, y: (y1 + y2) / 2 };
+        edges[i].push({ to: j, via });
+        edges[j].push({ to: i, via });
+      }
+    }
+  const rectAt = (p) => R.findIndex((r) => p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h);
+  function path(from, to) {
+    const a = rectAt(from), b = rectAt(to);
+    if (a < 0 || b < 0 || a === b) return [to];
+    const prev = new Map([[a, null]]);
+    const q = [a];
+    while (q.length) {
+      const c = q.shift();
+      if (c === b) break;
+      for (const e of edges[c]) if (!prev.has(e.to)) { prev.set(e.to, { from: c, via: e.via }); q.push(e.to); }
+    }
+    if (!prev.has(b)) return [to];
+    const chain = [];
+    for (let c = b; c !== null; c = prev.get(c) ? prev.get(c).from : null) chain.unshift(c);
+    const pts = [];
+    for (let i = 1; i < chain.length; i++) {
+      pts.push(prev.get(chain[i]).via);
+      if (i < chain.length - 1) pts.push(center(R[chain[i]]));
+    }
+    pts.push(to);
+    return pts;
+  }
+  return { path };
+})();
+
+function botGoal(room, b) {
+  const s = room.sabotage;
+  if (b.alive && b.role === 'crew' && s) {
+    if (s.type === 'lights') return { kind: 'lights', at: MAP.LIGHTS_PANEL };
+    const bots = [...room.players.values()].filter((p) => p.isBot && p.alive && p.role === 'crew');
+    const panel = bots.indexOf(b) % 2 === 0 ? 'A' : 'B';
+    return { kind: 'reactor', panel, at: MAP.REACTOR_PANELS[panel] };
+  }
+  if (b.role === 'crew') {
+    const t = b.tasks.find((t) => !t.done);
+    if (t) return { kind: 'task', id: t.id, at: MAP.TASKS.find((s) => s.id === t.id) };
+  }
+  const st = MAP.TASKS[Math.floor(Math.random() * MAP.TASKS.length)];
+  return { kind: 'wander', at: st };
+}
+
+function botThink(room, b, dt, now) {
+  const ai = b.ai;
+  const others = [...room.players.values()].filter((p) => p !== b);
+
+  if (b.alive && b.role === 'impostor') {
+    // mata si hay una víctima a tiro y nadie más mirando
+    if (now >= b.killReadyAt) {
+      const victim = others.find((p) => p.alive && p.role === 'crew' && dist(p, b) <= KILL_RANGE);
+      if (victim) {
+        const witnesses = others.filter((p) => p.alive && p !== victim && p.role === 'crew' && dist(p, victim) < 380);
+        if (!witnesses.length && Math.random() < dt * 2) { killPlayer(room, b, victim); ai.goal = null; ai.workUntil = 0; return; }
+      }
+    }
+    if (!room.sabotage && now >= room.sabotageReadyAt && Math.random() < dt / 45) {
+      const sw = Array.from({ length: 5 }, () => Math.random() < 0.5);
+      sw[Math.floor(Math.random() * 5)] = false;
+      room.sabotage = { type: 'lights', switches: sw };
+      io.to(room.code).emit('sabotageStarted', 'lights');
+    }
+  }
+
+  if (b.alive && b.role === 'crew') {
+    const body = room.bodies.find((x) => dist(x, b) < REPORT_RANGE - 10);
+    if (body && Math.random() < dt * 1.5) return startMeeting(room, b, body);
+  }
+
+  // si surge un sabotaje, cambia de objetivo
+  if (b.alive && b.role === 'crew' && room.sabotage && ai.goal && ai.goal.kind !== 'lights' && ai.goal.kind !== 'reactor') {
+    ai.goal = null;
+    ai.workUntil = 0;
+  }
+
+  if (ai.goal && ai.goal.kind === 'reactor') {
+    const s = room.sabotage;
+    if (!s || s.type !== 'reactor') { ai.goal = null; }
+    else if (dist(b, ai.goal.at) < 60) {
+      if (!s.holds[ai.goal.panel]) s.holds[ai.goal.panel] = b.id;
+      checkReactor(room);
+      return;
+    }
+  }
+
+  if (ai.workUntil) {
+    if (now < ai.workUntil) return;
+    ai.workUntil = 0;
+    const g = ai.goal;
+    ai.goal = null;
+    if (g && g.kind === 'task') {
+      const t = b.tasks.find((t) => t.id === g.id);
+      if (t) t.done = true;
+      checkWin(room);
+    } else if (g && g.kind === 'lights' && room.sabotage && room.sabotage.type === 'lights') {
+      sabotageFixed(room);
+    }
+    return;
+  }
+
+  if (!ai.goal) {
+    ai.goal = botGoal(room, b);
+    ai.path = b.alive ? NAV.path(b, ai.goal.at) : [ai.goal.at];
+    ai.stuckFor = 0;
+  }
+
+  const target = ai.path[0];
+  if (!target) { ai.goal = null; return; }
+  const dx = target.x - b.x, dy = target.y - b.y;
+  const d = Math.hypot(dx, dy);
+  if (d < 8) {
+    ai.path.shift();
+    if (!ai.path.length) {
+      const g = ai.goal;
+      if (g.kind === 'task') ai.workUntil = now + 2500 + Math.random() * 3500;
+      else if (g.kind === 'lights') ai.workUntil = now + 2000;
+      else if (g.kind === 'wander') ai.workUntil = now + 1000 + Math.random() * 4000;
+    }
+    return;
+  }
+  const step = Math.min(d, MAP.SPEED * 0.8 * dt);
+  const before = { x: b.x, y: b.y };
+  const n = b.alive
+    ? MAP.moveWithCollision(b.x, b.y, (dx / d) * step, (dy / d) * step)
+    : { x: b.x + (dx / d) * step, y: b.y + (dy / d) * step };
+  b.x = n.x;
+  b.y = n.y;
+  if (Math.hypot(b.x - before.x, b.y - before.y) < 0.5) {
+    ai.stuckFor += dt;
+    if (ai.stuckFor > 1) ai.goal = null;
+  } else ai.stuckFor = 0;
+}
+
+function botVotes(room, now) {
+  const m = room.meeting;
+  if (m.stage !== 'voting') return;
+  const alive = [...room.players.values()].filter((p) => p.alive);
+  for (const b of alive) {
+    if (!b.isBot || m.votes[b.id]) continue;
+    if (!b.ai.voteAt) b.ai.voteAt = now + 2000 + Math.random() * Math.min(15000, room.settings.votingTime * 500);
+    if (now < b.ai.voteAt) continue;
+    const candidates = alive.filter((p) => p !== b && !(b.role === 'impostor' && p.role === 'impostor'));
+    m.votes[b.id] = Math.random() < 0.5 || !candidates.length ? 'skip' : candidates[Math.floor(Math.random() * candidates.length)].id;
+  }
+}
+
 function tickRoom(room) {
   const now = Date.now();
+
+  if (room.phase === 'playing') {
+    for (const p of room.players.values()) {
+      if (p.isBot && room.phase === 'playing') botThink(room, p, TICK_MS / 1000, now);
+    }
+  }
+  if (room.phase === 'meeting') botVotes(room, now);
 
   if (room.phase === 'playing' && room.sabotage && room.sabotage.type === 'reactor') {
     const s = room.sabotage;
@@ -478,7 +683,22 @@ io.on('connection', (socket) => {
       discussionTime: clampInt(s.discussionTime, 0, 120, cur.discussionTime),
       votingTime: clampInt(s.votingTime, 15, 300, cur.votingTime),
       tasksPerPlayer: clampInt(s.tasksPerPlayer, 1, MAP.TASKS.length, cur.tasksPerPlayer),
+      hostRole: HOST_ROLES.includes(s.hostRole) ? s.hostRole : cur.hostRole,
     };
+  });
+
+  // Modo admin: bots para jugar solo o completar la sala
+  socket.on('addBot', () => {
+    if (!room || room.hostId !== socket.id || room.phase !== 'lobby') return;
+    if (room.players.size >= MAX_PLAYERS) return;
+    const bot = newBot(room);
+    room.players.set(bot.id, bot);
+  });
+
+  socket.on('removeBot', () => {
+    if (!room || room.hostId !== socket.id || room.phase !== 'lobby') return;
+    const bots = [...room.players.values()].filter((p) => p.isBot);
+    if (bots.length) room.players.delete(bots[bots.length - 1].id);
   });
 
   socket.on('startGame', (cb) => {
@@ -531,13 +751,7 @@ io.on('connection', (socket) => {
     if (now < p.killReadyAt) return;
     const t = room.players.get(targetId);
     if (!t || !t.alive || t.role === 'impostor' || t.inVent || dist(p, t) > KILL_RANGE) return;
-    t.alive = false;
-    room.bodies.push({ id: room.nextBodyId++, color: t.color, x: Math.round(t.x), y: Math.round(t.y) });
-    forcePos(p, t.x, t.y);
-    p.killReadyAt = now + room.settings.killCooldown * 1000;
-    io.to(t.id).emit('killed', { killerColor: p.color });
-    socket.emit('didKill');
-    checkWin(room);
+    killPlayer(room, p, t);
   });
 
   socket.on('report', (bodyId) => {
@@ -592,12 +806,6 @@ io.on('connection', (socket) => {
     io.to(room.code).emit('sabotageStarted', type);
   });
 
-  function sabotageFixed() {
-    room.sabotage = null;
-    room.sabotageReadyAt = Date.now() + SABOTAGE_COOLDOWN;
-    io.to(room.code).emit('sabotageFixed');
-  }
-
   socket.on('lightsToggle', (i) => {
     const p = me();
     if (!p || room.phase !== 'playing' || !p.alive) return;
@@ -605,7 +813,7 @@ io.on('connection', (socket) => {
     if (!s || s.type !== 'lights' || !Number.isInteger(i) || i < 0 || i >= 5) return;
     if (dist(p, MAP.LIGHTS_PANEL) > USE_RANGE + 40) return;
     s.switches[i] = !s.switches[i];
-    if (s.switches.every(Boolean)) sabotageFixed();
+    if (s.switches.every(Boolean)) sabotageFixed(room);
   });
 
   socket.on('reactorHold', ({ panel, holding } = {}) => {
@@ -619,7 +827,7 @@ io.on('connection', (socket) => {
     } else if (s.holds[panel] === p.id) {
       s.holds[panel] = null;
     }
-    if (s.holds.A && s.holds.B && s.holds.A !== s.holds.B) sabotageFixed();
+    checkReactor(room);
   });
 
   socket.on('vote', (target) => {
@@ -657,11 +865,11 @@ io.on('connection', (socket) => {
     if (!p) return;
     const r = room;
     r.players.delete(socket.id);
-    if (r.players.size === 0) {
+    if (humans(r).length === 0) {
       rooms.delete(r.code);
       return;
     }
-    if (r.hostId === socket.id) r.hostId = r.players.keys().next().value;
+    if (r.hostId === socket.id) r.hostId = humans(r)[0].id;
     systemChat(r, `${p.name} se ha ido.`);
     if (r.meeting) {
       delete r.meeting.votes[socket.id];

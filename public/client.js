@@ -110,6 +110,8 @@
     { key: 'tasksPerPlayer', label: 'Tareas por jugador', min: 1, max: MAP.TASKS.length, step: 1 },
   ];
   let lobbySig = '';
+  const ROLES = ['random', 'crew', 'impostor'];
+  const ROLE_LABEL = { random: 'Aleatorio', crew: 'Tripulante', impostor: 'Impostor' };
 
   function renderLobby(s) {
     const isHost = s.hostId === s.you.id;
@@ -140,9 +142,19 @@
         ${isHost ? `<button data-set="${o.key}" data-d="-1">−</button>` : ''}
         <b>${s.settings[o.key]}${o.unit || ''}</b>
         ${isHost ? `<button data-set="${o.key}" data-d="1">+</button>` : ''}
-      </div></div>`).join('');
+      </div></div>`).join('') + `
+      <div class="setting admin"><span>🛠 Tu rol (admin)</span><div class="ctrl">
+        ${isHost ? '<button data-role="-1">−</button>' : ''}
+        <b>${ROLE_LABEL[s.settings.hostRole] || 'Aleatorio'}</b>
+        ${isHost ? '<button data-role="1">+</button>' : ''}
+      </div></div>`;
+
+    const bots = s.players.filter((p) => p.id.startsWith('bot_')).length;
+    $('botRow').classList.toggle('hidden', !isHost);
+    $('botCount').textContent = bots ? `${bots} bot${bots > 1 ? 's' : ''}` : 'Sin bots';
 
     $('startBtn').classList.toggle('hidden', !isHost);
+    $('soloBtn').classList.toggle('hidden', !isHost);
     $('lobbyInfo').textContent = isHost
       ? `Mínimo ${s.minPlayers} jugadores para empezar.`
       : 'Esperando a que el anfitrión empiece la partida...';
@@ -153,12 +165,26 @@
     if (b && !b.classList.contains('taken')) socket.emit('setColor', b.dataset.color);
   });
   $('settings').addEventListener('click', (e) => {
+    const r = e.target.closest('button[data-role]');
+    if (r && state) {
+      const i = (ROLES.indexOf(state.settings.hostRole) + Number(r.dataset.role) + ROLES.length) % ROLES.length;
+      socket.emit('updateSettings', { ...state.settings, hostRole: ROLES[i] });
+      return;
+    }
     const b = e.target.closest('button[data-set]');
     if (!b || !state) return;
     const o = SETTINGS.find((x) => x.key === b.dataset.set);
     const v = Math.max(o.min, Math.min(o.max, state.settings[o.key] + o.step * Number(b.dataset.d)));
     socket.emit('updateSettings', { ...state.settings, [o.key]: v });
   });
+  $('addBot').onclick = () => socket.emit('addBot');
+  $('removeBot').onclick = () => socket.emit('removeBot');
+  $('soloBtn').onclick = () => {
+    // Partida rápida en solitario: rellena con bots hasta 6 y empieza
+    const need = Math.max(0, 6 - state.players.length);
+    for (let i = 0; i < need; i++) socket.emit('addBot');
+    setTimeout(() => $('startBtn').click(), 250);
+  };
   $('startBtn').onclick = () => {
     $('lobbyError').textContent = '';
     socket.emit('startGame', (res) => { if (res && !res.ok) $('lobbyError').textContent = res.error; });
