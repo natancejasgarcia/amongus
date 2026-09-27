@@ -75,14 +75,15 @@
   }
 
   const builders = {
-    // Pong: gana 3 puntos a la CPU
+    // Pong: gana 2 puntos a la CPU (CPU con reacción y puntería imperfectas)
     pong(hooks) {
       const W = 440, H = 260, PW = 8, PH = 60, BR = 5, GOAL = 2;
       bodyEl.innerHTML = `<p class="mg-center">Gana 2 puntos a la CPU · <b>W/S</b>, flechas o arrastra</p>`;
       const { c, g } = makeCanvas(W, H);
       bodyEl.appendChild(c);
       const me = { y: H / 2 - PH / 2, score: 0, target: null };
-      const cpu = { y: H / 2 - PH / 2, score: 0 };
+      const cpu = { y: H / 2 - PH / 2, score: 0, speed: 140, aim: 0 };
+      const newAim = () => (cpu.aim = (Math.random() - 0.5) * PH * 1.8);
       const ball = { x: W / 2, y: H / 2, vx: 0, vy: 0, speed: 0, wait: 0 };
       let msg = null;
       const serve = (dir) => {
@@ -98,18 +99,21 @@
       c.addEventListener('pointerleave', () => (me.target = null));
       const bounce = (py, dir) => {
         const rel = Math.max(-1, Math.min(1, (ball.y - (py + PH / 2)) / (PH / 2)));
-        ball.speed = Math.min(ball.speed * 1.07, 520);
-        ball.vx = Math.cos(rel * 1.0) * ball.speed * dir;
-        ball.vy = Math.sin(rel * 1.0) * ball.speed;
+        ball.speed = Math.min(ball.speed * 1.05, 400);
+        ball.vx = Math.cos(rel * 1.05) * ball.speed * dir;
+        ball.vy = Math.sin(rel * 1.05) * ball.speed;
+        if (dir > 0) newAim(); // tras tu golpe, la CPU elige dónde apuntar (con error)
       };
+      newAim();
       const stop = runLoop((dt) => {
         if (current.finished) return;
         if (me.target != null) me.y += Math.sign(me.target - PH / 2 - me.y) * Math.min(Math.abs(me.target - PH / 2 - me.y), 700 * dt);
         if (keys.held.has('w') || keys.held.has('arrowup')) me.y -= 380 * dt;
         if (keys.held.has('s') || keys.held.has('arrowdown')) me.y += 380 * dt;
         me.y = Math.max(0, Math.min(H - PH, me.y));
-        const cy = ball.vx > 0 ? ball.y : H / 2;
-        cpu.y += Math.sign(cy - PH / 2 - cpu.y) * Math.min(Math.abs(cy - PH / 2 - cpu.y), 200 * dt);
+        // solo reacciona cuando la bola cruza a su campo
+        const cy = ball.vx > 0 && ball.x > W * 0.45 ? ball.y + cpu.aim : H / 2;
+        cpu.y += Math.sign(cy - PH / 2 - cpu.y) * Math.min(Math.abs(cy - PH / 2 - cpu.y), cpu.speed * dt);
         cpu.y = Math.max(0, Math.min(H - PH, cpu.y));
         if (msg) { msg.t -= dt; if (msg.t <= 0) msg = null; }
 
@@ -121,7 +125,11 @@
           if (ball.vx > 0 && ball.x + BR > W - 14 - PW && ball.x < W - 14 && ball.y > cpu.y - BR && ball.y < cpu.y + PH + BR) { ball.x = W - 14 - PW - BR; bounce(cpu.y, -1); }
           if (ball.x < -10) {
             cpu.score++;
-            if (cpu.score >= GOAL) { me.score = cpu.score = 0; msg = { text: '¡La CPU gana! Otra vez', color: '#ff6b6b', t: 1.5 }; }
+            if (cpu.score >= GOAL) {
+              me.score = cpu.score = 0;
+              cpu.speed = Math.max(90, cpu.speed * 0.8); // cada derrota la CPU se vuelve más lenta
+              msg = { text: '¡La CPU gana! Otra vez (ahora más lenta)', color: '#ff6b6b', t: 1.5 };
+            }
             serve(-1); break;
           }
           if (ball.x > W + 10) {
