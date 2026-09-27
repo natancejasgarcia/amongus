@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Among Us Web</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <canvas id="stars"></canvas>
+
+  <!-- INICIO -->
+  <section id="home" class="screen active">
+    <div class="home-card">
+      <canvas id="homeCrew" width="140" height="140"></canvas>
+      <h1>AMONG US <span>web</span></h1>
+      <input id="nameInput" maxlength="14" placeholder="Tu nombre" autocomplete="off" />
+      <button id="createBtn" class="btn big">Crear sala</button>
+      <div class="join-row">
+        <input id="codeInput" maxlength="4" placeholder="CÓDIGO" autocomplete="off" />
+        <button id="joinBtn" class="btn">Unirse</button>
+      </div>
+      <p id="homeError" class="error"></p>
+      <p class="hint">WASD / flechas para moverte · E usar · Q matar · R reportar · V conducto · M mapa</p>
+    </div>
+  </section>
+
+  <!-- LOBBY -->
+  <section id="lobby" class="screen">
+    <div class="lobby-wrap">
+      <div class="panel">
+        <div class="code-box">
+          <span>CÓDIGO DE SALA</span>
+          <strong id="lobbyCode">----</strong>
+          <button id="copyLink" class="btn small ghost">Copiar enlace</button>
+        </div>
+        <h3>Jugadores <span id="playerCount"></span></h3>
+        <ul id="playerList" class="player-list"></ul>
+        <h3>Tu color</h3>
+        <div id="colorGrid" class="color-grid"></div>
+      </div>
+      <div class="panel">
+        <h3>Ajustes</h3>
+        <div id="settings" class="settings"></div>
+        <button id="startBtn" class="btn big">Empezar partida</button>
+        <p id="lobbyInfo" class="hint"></p>
+        <p id="lobbyError" class="error"></p>
+      </div>
+      <div class="panel chat-panel">
+        <h3>Chat</h3>
+        <div class="chat-log" id="lobbyChatLog"></div>
+        <form class="chat-form" data-chat>
+          <input maxlength="200" placeholder="Escribe un mensaje..." autocomplete="off" />
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- JUEGO -->
+  <section id="game" class="screen">
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="hud">
+      <div class="hud-top">
+        <div class="taskbar"><div class="taskbar-fill" id="taskbarFill"></div><span>TAREAS TOTALES</span></div>
+        <div id="taskList" class="task-list"></div>
+      </div>
+      <div id="sabotageAlert" class="sabotage-alert hidden"></div>
+      <div id="roomLabel" class="room-label"></div>
+
+      <div class="actions">
+        <button class="act" id="btnSabotage" data-key="">SABOTAJE</button>
+        <button class="act" id="btnVent">CONDUCTO<small>V</small></button>
+        <button class="act" id="btnKill">MATAR<small>Q</small><b class="cd"></b></button>
+        <button class="act" id="btnReport">REPORTAR<small>R</small></button>
+        <button class="act" id="btnUse">USAR<small>E</small></button>
+      </div>
+      <button class="map-btn" id="btnMap">MAPA</button>
+      <div id="sabotageMenu" class="sabotage-menu hidden">
+        <button data-sab="lights">💡 Luces</button>
+        <button data-sab="reactor">☢️ Reactor</button>
+      </div>
+      <div id="joystick" class="joystick hidden"><div class="stick"></div></div>
+    </div>
+
+    <div id="ghostChat" class="ghost-chat hidden">
+      <div class="chat-log" id="ghostChatLog"></div>
+      <form class="chat-form" data-chat>
+        <input maxlength="200" placeholder="Chat de fantasmas..." autocomplete="off" />
+      </form>
+    </div>
+
+    <div id="mapOverlay" class="overlay hidden"><canvas id="mapCanvas"></canvas><p>Pulsa M para cerrar</p></div>
+
+    <div id="minigame" class="overlay hidden">
+      <div class="mg-box">
+        <button class="mg-close" id="mgClose">✕</button>
+        <h2 id="mgTitle"></h2>
+        <div id="mgBody"></div>
+      </div>
+    </div>
+
+    <div id="meeting" class="overlay hidden">
+      <div class="meeting-box">
+        <div class="meeting-head">
+          <h2 id="meetingTitle">¿Quién es el impostor?</h2>
+          <div id="meetingTimer"></div>
+        </div>
+        <div class="meeting-main">
+          <div id="voteGrid" class="vote-grid"></div>
+          <div class="chat-panel meeting-chat">
+            <div class="chat-log" id="meetingChatLog"></div>
+            <form class="chat-form" data-chat>
+              <input maxlength="200" placeholder="Habla..." autocomplete="off" />
+            </form>
+          </div>
+        </div>
+        <div class="meeting-foot">
+          <button id="skipBtn" class="btn">Omitir voto</button>
+          <div id="skipVoters" class="voters"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="splash" class="overlay splash hidden"></div>
+    <div id="ejection" class="overlay ejection hidden">
+      <canvas id="ejectCrew" width="160" height="160"></canvas>
+      <h2 id="ejectText"></h2>
+      <p id="ejectSub"></p>
+    </div>
+    <div id="endScreen" class="overlay hidden">
+      <div class="end-box">
+        <h1 id="endTitle"></h1>
+        <p id="endReason"></p>
+        <div id="endPlayers" class="end-players"></div>
+        <button id="lobbyBtn" class="btn big">Volver al lobby</button>
+        <p id="endWait" class="hint">Esperando al anfitrión...</p>
+      </div>
+    </div>
+  </section>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/shared/map.js"></script>
+  <script src="render.js"></script>
+  <script src="minigames.js"></script>
+  <script src="client.js"></script>
+</body>
+</html>
